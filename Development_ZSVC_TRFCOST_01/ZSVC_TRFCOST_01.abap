@@ -117,6 +117,7 @@ DATA: BEGIN OF thdr OCCURS   0,
         actual     TYPE v_cosp_view-wog001,
         saldo      TYPE v_cosp_view-wog001,
         aufnr      LIKE caufv-aufnr,
+        werks      LIKE caufv-werks,
         seque      LIKE sy-tabix,
         auart      LIKE caufv-auart,
         bukrs      LIKE bkpf-bukrs,
@@ -2574,9 +2575,63 @@ FORM get_email_from_dli USING p_dli_name TYPE soobjinfi1-obj_name
 ENDFORM.                    " GET_EMAIL_FROM_DLI
 
 *&---------------------------------------------------------------------*
+*&      Form  GET_MINUS_RECIPIENTS
+*&      Union of folder BPDH_HO (always) + BPDH_{WERKS} (conditional)
+*&---------------------------------------------------------------------*
+FORM get_minus_recipients USING p_werks TYPE werks_d
+                           CHANGING p_recipients TYPE tt_email_recipient.
+
+  DATA: lt_ho         TYPE tt_email_recipient,
+        lt_cabang     TYPE tt_email_recipient,
+        lv_folder_cbg TYPE soobjinfi1-obj_name.
+
+  " 1. HO folder - ALWAYS read, for every Budget Minus WO
+  PERFORM get_email_from_dli USING 'BPDH_HO' CHANGING lt_ho.
+
+  IF lt_ho IS INITIAL.
+    WRITE: / |BPDH_HO is empty or not found - check SBWP folder setup|.
+  ENDIF.
+
+  " 2. Build branch folder name dynamically from WO's WERKS, e.g. BPDH_JKT
+  lv_folder_cbg = |BPDH_{ p_werks }|.
+  CONDENSE lv_folder_cbg.
+
+  " 3. Read branch folder - if not found, lt_cabang stays empty (not an error)
+  PERFORM get_email_from_dli USING lv_folder_cbg CHANGING lt_cabang.
+
+  IF lt_cabang IS INITIAL.
+    WRITE: / |WERKS { p_werks }: branch folder { lv_folder_cbg } not found - notification sent to BPDH_HO only|.
+  ENDIF.
+
+  " 4. Union
+  p_recipients = lt_ho.
+  APPEND LINES OF lt_cabang TO p_recipients.
+
+  " 5. Case-insensitive dedupe
+  PERFORM dedupe_recipients CHANGING p_recipients.
+
+ENDFORM.                    " GET_MINUS_RECIPIENTS
+
+*&---------------------------------------------------------------------*
+*&      Form  DEDUPE_RECIPIENTS
+*&      Remove duplicate email addresses (case-insensitive)
+*&---------------------------------------------------------------------*
+FORM dedupe_recipients CHANGING p_recipients TYPE tt_email_recipient.
+
+  LOOP AT p_recipients ASSIGNING FIELD-SYMBOL(<ls_rec>).
+    <ls_rec>-recipient = to_upper( <ls_rec>-recipient ).
+  ENDLOOP.
+
+  SORT p_recipients BY recipient.
+  DELETE ADJACENT DUPLICATES FROM p_recipients COMPARING recipient.
+
+ENDFORM.                    " DEDUPE_RECIPIENTS
+
+*&---------------------------------------------------------------------*
 *&      Form  SEND_MINUS_EMAIL_PDH
 *&---------------------------------------------------------------------*
-FORM send_minus_email_pdh USING p_aufnr TYPE aufnr.
+FORM send_minus_email_pdh USING p_aufnr TYPE aufnr
+                                 p_werks TYPE werks_d.
 
   DATA: lt_recipients    TYPE tt_email_recipient,
         lt_html          TYPE bcsy_text,
@@ -2589,10 +2644,11 @@ FORM send_minus_email_pdh USING p_aufnr TYPE aufnr.
 
   PERFORM get_wo_detail USING p_aufnr CHANGING ls_wo_detail.
 
-  PERFORM get_email_from_dli USING 'PDH_ALL' CHANGING lt_recipients.
+  PERFORM get_minus_recipients USING p_werks
+                                CHANGING lt_recipients.
 
   IF lt_recipients IS INITIAL.
-    WRITE: / |WO { p_aufnr }: DLI PDH_ALL kosong, email tidak terkirim|.
+    WRITE: / |WO { p_aufnr } (Plant { p_werks }): no valid recipient (BPDH_HO empty) - email not sent|.
     RETURN.
   ENDIF.
 
@@ -2614,6 +2670,7 @@ FORM send_minus_email_pdh USING p_aufnr TYPE aufnr.
   APPEND '<p>WO berikut belum tertransfer cost-nya karena BUDGET MINUS:</p>' TO lt_html.
   APPEND '<table border="1" cellpadding="6" style="border-collapse:collapse;">' TO lt_html.
   APPEND |<tr><td><b>No WO</b></td><td>{ lv_aufnr_out }</td></tr>| TO lt_html.
+  APPEND |<tr><td><b>Plant</b></td><td>{ p_werks }</td></tr>| TO lt_html.
   APPEND |<tr><td><b>Cost Center</b></td><td>{ ls_wo_detail-kostl }</td></tr>| TO lt_html.
   APPEND |<tr><td><b>Amount</b></td><td>{ lv_wrbtr_out }</td></tr>| TO lt_html.
   APPEND |<tr><td><b>WO Create Date</b></td><td>{ lv_erdat_out }</td></tr>| TO lt_html.
@@ -2626,9 +2683,9 @@ FORM send_minus_email_pdh USING p_aufnr TYPE aufnr.
   TRY.
       PERFORM send_email_bcs TABLES lt_recipients
                              USING  lv_subject lt_html.
-      WRITE: / |WO { p_aufnr }: email budget minus terkirim ke PDH_ALL|.
+      WRITE: / |WO { p_aufnr } (Plant { p_werks }): email sent to { lines( lt_recipients ) } recipient(s) (HO+Branch)|.
     CATCH cx_bcs INTO lx_bcs.
-      WRITE: / |WO { p_aufnr }: gagal kirim email - { lx_bcs->get_text( ) }|.
+      WRITE: / |WO { p_aufnr } (Plant { p_werks }): send failed - { lx_bcs->get_text( ) }|.
   ENDTRY.
 
 ENDFORM.                    " SEND_MINUS_EMAIL_PDH

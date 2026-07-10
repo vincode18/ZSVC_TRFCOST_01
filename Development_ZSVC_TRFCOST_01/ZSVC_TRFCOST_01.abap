@@ -2589,7 +2589,8 @@ FORM get_minus_recipients USING p_werks TYPE werks_d
   PERFORM get_email_from_dli USING 'BPDH_HO' CHANGING lt_ho.
 
   IF lt_ho IS INITIAL.
-    WRITE: / |BPDH_HO is empty or not found - check SBWP folder setup|.
+    MESSAGE i398(00) WITH 'BPDH_HO is empty or not found -'
+                           'check SBWP folder setup' ##MG_MISSING ##NO_TEXT.
   ENDIF.
 
   " 2. Build branch folder name dynamically from WO's WERKS, e.g. BPDH_JKT
@@ -2600,7 +2601,8 @@ FORM get_minus_recipients USING p_werks TYPE werks_d
   PERFORM get_email_from_dli USING lv_folder_cbg CHANGING lt_cabang.
 
   IF lt_cabang IS INITIAL.
-    WRITE: / |WERKS { p_werks }: branch folder { lv_folder_cbg } not found - notification sent to BPDH_HO only|.
+    MESSAGE i398(00) WITH 'WERKS' p_werks
+                           'branch folder not found -' lv_folder_cbg ##MG_MISSING ##NO_TEXT.
   ENDIF.
 
   " 4. Union
@@ -2640,6 +2642,7 @@ FORM send_minus_email_pdh USING p_aufnr TYPE aufnr
         lv_aufnr_out     TYPE string,
         lv_wrbtr_out(25) TYPE c,
         lv_erdat_out(10) TYPE c,
+        lv_count_c       TYPE string,
         lx_bcs           TYPE REF TO cx_bcs.
 
   PERFORM get_wo_detail USING p_aufnr CHANGING ls_wo_detail.
@@ -2648,7 +2651,8 @@ FORM send_minus_email_pdh USING p_aufnr TYPE aufnr
                                 CHANGING lt_recipients.
 
   IF lt_recipients IS INITIAL.
-    WRITE: / |WO { p_aufnr } (Plant { p_werks }): no valid recipient (BPDH_HO empty) - email not sent|.
+    MESSAGE i398(00) WITH 'WO' p_aufnr
+                           'no valid recipient (BPDH_HO empty)' 'email not sent' ##MG_MISSING ##NO_TEXT.
     RETURN.
   ENDIF.
 
@@ -2683,9 +2687,12 @@ FORM send_minus_email_pdh USING p_aufnr TYPE aufnr
   TRY.
       PERFORM send_email_bcs TABLES lt_recipients
                              USING  lv_subject lt_html.
-      WRITE: / |WO { p_aufnr } (Plant { p_werks }): email sent to { lines( lt_recipients ) } recipient(s) (HO+Branch)|.
+      lv_count_c = |{ lines( lt_recipients ) }|.
+      MESSAGE i398(00) WITH 'WO' p_aufnr
+                             'email sent to' lv_count_c ##MG_MISSING ##NO_TEXT.
     CATCH cx_bcs INTO lx_bcs.
-      WRITE: / |WO { p_aufnr } (Plant { p_werks }): send failed - { lx_bcs->get_text( ) }|.
+      MESSAGE i398(00) WITH 'WO' p_aufnr
+                             'send failed:' lx_bcs->get_text( ) ##MG_MISSING ##NO_TEXT.
   ENDTRY.
 
 ENDFORM.                    " SEND_MINUS_EMAIL_PDH
